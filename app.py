@@ -259,8 +259,14 @@ with col1:
 with col2:
     corridas = st.number_input("Corridas por configuración", min_value=1, max_value=20, value=3, step=1)
 with col3:
-    etiqueta_default = f"Corrida #{len(st.session_state.historial) + 1}"
-    etiqueta = st.text_input("Etiqueta de esta corrida", value=etiqueta_default)
+    etiqueta_sugerida = f"Corrida #{len(st.session_state.historial) + 1}"
+    etiqueta_input = st.text_input(
+        "Etiqueta de esta corrida",
+        key="etiqueta_input",
+        placeholder=etiqueta_sugerida,
+        help="Ponle un nombre que te ayude a identificarla despues, ej. 'Con 1.5M filas' o 'Laptop en carga'.",
+    )
+    etiqueta = etiqueta_input.strip() or etiqueta_sugerida
 
 col_run, col_clear = st.columns([1, 1])
 ejecutar = col_run.button("▶ Ejecutar benchmark", type="primary", width="stretch")
@@ -345,6 +351,7 @@ if ejecutar:
             st.session_state.historial.append({"etiqueta": etiqueta, "metricas": metricas_final, "filas": filas})
             benchmark.graficar(metricas_final)
             st.success(f"Benchmark '{etiqueta}' completo. Fracción secuencial estimada (Amdahl): {metricas_final['fraccion_secuencial']:.4f}")
+            st.session_state.etiqueta_input = ""
             st.rerun()
         except FileNotFoundError:
             st.error("No se encontró 'mpiexec'. Instala MS-MPI y reinicia esta app (cierra la terminal donde corre Streamlit y ábrela de nuevo).")
@@ -361,7 +368,8 @@ if st.session_state.historial:
     for idx, item in enumerate(st.session_state.historial, start=1):
         m = item["metricas"]
         filas_crudas = item.get("filas", [])
-        st.markdown(f"### Corrida {idx}: {item['etiqueta']}")
+        st.markdown(f"### {item['etiqueta']}")
+        st.caption(f"Corrida #{idx} de esta sesión")
 
         st.markdown("**Datos por configuración** (cada fila es una repetición individual, sin promediar):")
         if filas_crudas:
