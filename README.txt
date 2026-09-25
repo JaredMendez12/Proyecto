@@ -1,4 +1,4 @@
-PROYECTO PARCIAL 1 - Computo Paralelo con Ley de Amdahl y MPI
+PROYECTO - Computo Paralelo con Ley de Amdahl y MPI
 ===================================================================
 
 Descripcion
@@ -165,17 +165,6 @@ secuencial                 se despeja la fraccion paralelizable p de
 Graficas de resultados     src\benchmark.py -> graficar(): genera
                             tiempo_ejecucion.png, aceleracion.png y
                             eficiencia.png en resultados\graficas\.
-
-Nota sobre "hilos" vs "procesos": MPI crea PROCESOS del sistema
-operativo (cada uno con su propia memoria, se comunican por mensajes),
-no hilos (que comparten memoria dentro de un mismo proceso). El
-enunciado dice "1, 2, 4 y 8 hilos" de forma coloquial; en este proyecto
-esos numeros son, tecnicamente, procesos MPI.
-
-El unico hilo real de Python en todo el proyecto esta en gui.py
-(threading.Thread), y es solo para que la ventana no se congele
-mientras espera a un subproceso; no tiene relacion con el
-procesamiento paralelo del dataset ni con la Ley de Amdahl.
 
 
 5. ESTRUCTURA DE ARCHIVOS
