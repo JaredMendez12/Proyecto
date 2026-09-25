@@ -1,0 +1,272 @@
+REPORTE TECNICO - PROYECTO PARCIAL 1
+Computo Paralelo con MPI (Scatter/Gather/Barrera) + Ley de Amdahl
+===================================================================
+Este documento resume TODO lo implementado en el proyecto: que hace
+cada archivo, donde esta cada requisito, como correrlo (3 formas
+distintas) y como interpretar los resultados. Esta pensado para
+copiar/pegar partes directamente en tu documento final.
+
+
+1. QUE HACE EL PROYECTO (RESUMEN)
+===================================================================
+Se procesa un dataset de resenas de Steam ("Steam Reviews"): por cada
+juego (app_name), se cuenta cuantas resenas son positivas, cuantas
+negativas, y se suma el total de votos utiles (review_votes).
+
+Ese mismo calculo se hace de dos formas:
+  - SECUENCIAL: un solo proceso recorre todo el dataset (src/secuencial.py).
+  - PARALELA (MPI, patron Maestro/Esclavo): el dataset se reparte en
+    bloques entre N procesos (src/paralelo.py), usando MPI Scatter para
+    repartir, cada proceso calcula su bloque, y MPI Gather para juntar
+    los resultados parciales en el proceso maestro.
+
+Luego se compara el tiempo de ambas versiones con distintas cantidades
+de procesos (1, 2, 4, 8) para calcular aceleracion, eficiencia y la
+fraccion secuencial segun la Ley de Amdahl (src/benchmark.py).
+
+
+2. ESTRUCTURA DE ARCHIVOS Y RUTAS
+===================================================================
+Carpeta raiz: C:\Users\yoyar\Proyectos\proyecto_parcial_1
+
+  main.py                  -> Genera la muestra del dataset (paso 1)
+  amdahl.py                -> Script APARTE, exploratorio (ver seccion 8)
+  gui.py                   -> Ventana de escritorio (Tkinter) para
+                               correr todo con botones
+  app.py                   -> Interfaz web (Streamlit) para correr todo
+                               con botones, salida en vivo y graficas
+  README.txt               -> Instrucciones originales de instalacion
+  REPORTE_TECNICO.txt      -> Este archivo
+
+  src\
+    secuencial.py           -> Version SECUENCIAL (referencia, T1)
+    paralelo.py              -> Version PARALELA con MPI (Maestro/Esclavo)
+    benchmark.py              -> Orquestador: corre paralelo.py con
+                                 distintos N de procesos, calcula metricas
+                                 y genera graficas
+
+  data\
+    raw\dataset.csv          -> Dataset original (Steam Reviews), NO se
+                                sube a git (.gitignore), hay que colocarlo
+                                manualmente ahi
+    sample\muestra_grande.csv -> Muestra de 1,500,000 filas generada por
+                                main.py, usada por secuencial.py y
+                                paralelo.py
+
+  resultados\
+    tiempos.csv               -> Tiempos crudos de la ultima corrida de
+                                 benchmark.py (una fila por repeticion)
+    graficas\
+      tiempo_ejecucion.png     -> Tiempo total y de sincronizacion vs N
+      aceleracion.png          -> Aceleracion real vs ideal
+      eficiencia.png           -> Eficiencia vs N
+
+
+3. COMO CORRER EL PROYECTO (3 FORMAS)
+===================================================================
+Las 3 formas ejecutan exactamente el mismo codigo por debajo; son solo
+distintas maneras de operarlo. Antes de cualquiera, asegurate de tener
+una terminal en la que "python" y "mpiexec" funcionen (si acabas de
+instalar algo, cierra la terminal por completo y abre una nueva).
+
+--- FORMA 1: Terminal (linea de comandos) ---
+  cd C:\Users\yoyar\Proyectos\proyecto_parcial_1
+
+  python main.py                                   REM genera la muestra
+  python src\secuencial.py                         REM version secuencial
+  mpiexec -n 4 python src\paralelo.py               REM version paralela manual (4 procesos)
+  python src\benchmark.py                          REM benchmark completo (1,2,4,8 x 3 repeticiones + graficas)
+
+--- FORMA 2: Ventana de escritorio (Tkinter, sin instalar nada extra) ---
+  python gui.py
+
+  Botones: generar dataset, correr secuencial, correr paralelo con N
+  procesos elegido en un spinner, correr benchmark completo, y abrir la
+  carpeta de resultados. La salida de cada comando se muestra en vivo
+  dentro de la misma ventana (consola integrada).
+
+--- FORMA 3: Interfaz web (Streamlit, mas visual) ---
+  python -m streamlit run app.py
+
+  Se abre sola una pestana en el navegador (http://localhost:8501).
+  Tiene: botones 1-3 con salida en vivo en un panel compartido; una
+  seccion de benchmark configurable (lista de procesos y numero de
+  repeticiones editables); graficas que se van dibujando conforme
+  terminan las configuraciones; y, para cada vez que ejecutas el
+  benchmark, un desglose con:
+    - Datos crudos por configuracion (una tabla por cada N de proceso,
+      con cada repeticion individual sin promediar)
+    - Tabla de comparacion/resumen (promedios, aceleracion, eficiencia)
+    - 3 graficas en recuadros con una descripcion debajo de cada una
+  Al final de la pagina: analisis automatico de diferencias entre todas
+  las veces que hayas corrido el benchmark en esa sesion (comparando
+  fraccion secuencial, mejor aceleracion lograda, variabilidad del
+  tiempo de referencia), mas las graficas superpuestas de todas las
+  corridas juntas.
+
+  Requiere el paquete streamlit (pip install streamlit), ya instalado.
+
+
+4. DETALLE TECNICO POR ARCHIVO
+===================================================================
+
+--- src\secuencial.py ---
+Recorre el DataFrame fila por fila con itertuples() (mas rapido que
+iterrows) y acumula, en un diccionario, positivas/negativas/votos por
+juego. A proposito NO usa df.groupby() de pandas (que seria mas rapido
+porque esta en C), porque el objetivo es implementar y MEDIR nuestra
+propia logica, no la de pandas. El tiempo medido aqui es T1, la base
+para calcular aceleracion.
+
+--- src\paralelo.py ---
+Implementa el patron Maestro/Esclavo con MPI (mpi4py). Mapa de
+requisitos dentro del archivo (todo esta etiquetado con comentarios
+"REQUISITO:" para encontrarlo facil):
+
+  Patron Maestro/Esclavo   -> funcion main(): bloque "if rank == 0"
+                              (maestro, unico que lee el CSV) vs el
+                              resto de rangos (esclavos)
+  Division por bloques     -> np.array_split(np.arange(len(df)), size)
+                              parte el dataset en tantos bloques como
+                              procesos haya
+  Scatter                  -> comm.scatter(bloques, root=0)
+                              reparte un bloque distinto a cada proceso
+  Gather                   -> comm.gather(resultado_local, root=0)
+                              junta los resultados parciales en el maestro
+  Cerraduras (Barreras)    -> comm.Barrier() x2: una antes de arrancar
+                              el cronometro (para que todos empiecen
+                              juntos) y otra despues de procesar (para
+                              medir cuanto espera cada proceso a los
+                              demas = tiempo de sincronizacion)
+  Tiempo de sincronizacion -> se mide como t_sync_end - t_sync_start
+                              alrededor de la segunda barrera
+
+Nota importante sobre "hilos" vs "procesos": MPI crea PROCESOS del
+sistema operativo (cada uno con su propia memoria), no hilos (threads,
+que comparten memoria dentro de un mismo proceso). El enunciado del
+profesor dice "1, 2, 4 y 8 hilos" de forma coloquial; en este proyecto
+esos numeros son, tecnicamente, procesos MPI. Se sugiere aclarar esto
+en el documento final (ver seccion 7).
+
+--- src\benchmark.py ---
+Orquesta todo el experimento. Funciones principales:
+
+  ejecutar_comando_mpi(n_procesos)
+    Lanza "mpiexec -n N python paralelo.py" como subproceso y extrae el
+    tiempo total y de sincronizacion que paralelo.py imprime.
+
+  correr_benchmark(n_procesos_lista, corridas, on_progreso=None)
+    Repite ejecutar_comando_mpi() "corridas" veces (por defecto 3) para
+    cada N en n_procesos_lista (por defecto [1,2,4,8]). Aqui es donde se
+    cumple literalmente el requisito de "3 corridas... con 1,2,4,8
+    hilos": CORRIDAS=3 son las repeticiones, NUM_PROCESOS=[1,2,4,8] es
+    la lista de configuraciones. Guarda todo en resultados\tiempos.csv.
+
+  calcular_metricas(filas, n_procesos_lista)
+    A partir de las filas crudas (una por repeticion), calcula:
+      - promedios[n] / promedios_sync[n]: promedio de las "corridas"
+        (repeticiones) para cada configuracion de procesos
+      - aceleraciones: Speedup S(n) = T1 / Tn
+      - eficiencias: E(n) = S(n) / n
+      - Ley de Amdahl: se despeja la fraccion paralelizable p de
+        S(n) = 1 / ((1-p) + p/n)  =>  p = (1 - 1/S) / (1 - 1/n)
+        y se promedia sobre las configuraciones con n>1. La fraccion
+        secuencial reportada es (1 - p).
+
+  graficar(metricas)
+    Genera y guarda las 3 graficas en resultados\graficas\.
+
+--- main.py ---
+Lee las primeras 1,500,000 filas del dataset original
+(data\raw\dataset.csv) y guarda esa muestra en
+data\sample\muestra_grande.csv, que es lo que usan secuencial.py y
+paralelo.py (evita tener que leer el archivo completo cada vez).
+
+--- gui.py ---
+Ventana de escritorio (Tkinter, viene incluido en Python). Cada boton
+llama, en un hilo de Python en segundo plano (threading.Thread), a
+subprocess.Popen() con el mismo comando que usarias en terminal, y va
+mostrando la salida linea por linea en una consola integrada. Ese hilo
+de threading.Thread es el UNICO lugar de todo el proyecto donde se usa
+un hilo real de Python -- y es solo para que la ventana no se congele
+mientras espera al subproceso; no tiene relacion con el procesamiento
+paralelo del dataset ni con la Ley de Amdahl.
+
+--- app.py ---
+Interfaz web con Streamlit. Reutiliza las funciones de src\benchmark.py
+(correr_benchmark, calcular_metricas, graficar) importandolas
+directamente, en vez de duplicar la logica. Guarda en
+st.session_state.historial cada vez que se ejecuta el benchmark (con su
+etiqueta, sus metricas y sus filas crudas), lo que permite comparar
+varias ejecuciones dentro de la misma sesion del navegador. Ese
+historial se pierde si recargas la pagina o cierras Streamlit (vive
+solo en memoria de esa sesion).
+
+
+5. TERMINOLOGIA (PARA EL DOCUMENTO FINAL)
+===================================================================
+  Configuracion       Un valor de la lista de procesos a probar (ej. 4)
+  Proceso             Cada uno de los N procesos MPI que se lanzan con
+                       "mpiexec -n N" para una configuracion. El
+                       enunciado los llama "hilos" de forma coloquial;
+                       tecnicamente son procesos (memoria separada, se
+                       comunican por mensajes MPI), no hilos del
+                       sistema operativo.
+  Corrida/Repeticion  Cada vez que se mide el tiempo de UNA MISMA
+                       configuracion, para promediar y reducir el ruido
+                       de la medicion. Es independiente del numero de
+                       procesos (se hacen 3 corridas tanto para 1
+                       proceso como para 8).
+  Aceleracion/Speedup  T1 / Tn (cuanto mas rapido es correr con n
+                       procesos comparado con 1 solo)
+  Eficiencia           Aceleracion / n (que tan bien se aprovecha cada
+                       proceso adicional; 100% = escalamiento perfecto)
+  Fraccion secuencial  Segun la Ley de Amdahl, la parte del programa que
+                       NO se puede paralelizar (lectura de datos,
+                       overhead de comunicacion, etc.)
+
+
+6. INSTALACION DEL ENTORNO (YA REALIZADA EN ESTA MAQUINA)
+===================================================================
+  - MS-MPI (runtime) instalado desde:
+    https://github.com/microsoft/Microsoft-MPI/releases (v10.1.1)
+    Solo se instalo el runtime (msmpisetup.exe); el SDK (msmpisdk.msi)
+    NO fue necesario porque mpi4py se instalo via wheel precompilado.
+  - Dependencias Python: pandas 2.2.3, numpy, matplotlib, mpi4py,
+    streamlit (pip install pandas numpy matplotlib mpi4py streamlit)
+    Nota: se fijo pandas en 2.2.3 (no la ultima version) porque Windows
+    Smart App Control bloqueaba la DLL compilada de una version mas
+    nueva por falta de reputacion.
+  - Se corrigio el PATH del usuario para que "python" y "mpiexec"
+    resuelvan correctamente en terminales nuevas (el PATH por defecto
+    de Windows apuntaba al alias roto de Microsoft Store en vez del
+    Python real instalado).
+
+
+7. EVIDENCIA GENERADA
+===================================================================
+  resultados\tiempos.csv           -> tiempos crudos (1,2,4,8 procesos x
+                                       3 repeticiones cada uno)
+  resultados\graficas\*.png         -> las 3 graficas descritas arriba
+
+Estos archivos se regeneran cada vez que se corre el benchmark completo
+(por cualquiera de las 3 formas de la seccion 3).
+
+
+8. NOTAS Y LIMITACIONES CONOCIDAS
+===================================================================
+  - amdahl.py (en la raiz) es un script APARTE y exploratorio, hecho
+    con multiprocessing.Pool (no con MPI). No forma parte del pipeline
+    principal (main.py / benchmark.py no lo usan). No se debe confundir
+    con src\paralelo.py, que es la implementacion real con MPI que
+    cumple los requisitos del entregable.
+  - Los tiempos medidos tienen ruido notable (varian entre corridas)
+    porque dependen de otros procesos corriendo en la misma maquina en
+    ese momento, y porque el trabajo por fila es relativamente poco
+    comparado con el overhead de arrancar procesos MPI. Por eso se
+    promedian 3 repeticiones por configuracion, y por eso la fraccion
+    secuencial estimada puede variar un poco entre corridas del
+    benchmark (es normal, no indica un error en el codigo).
+  - El requisito "trabajar por bloques o hilos" se cumple con bloques
+    (division del DataFrame con np.array_split), que es una de las dos
+    opciones validas segun el enunciado ("o").

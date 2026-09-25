@@ -1,131 +1,127 @@
 """
-Version PARALELA del procesamiento, usando el patron maestro-trabajador
-con la libreria multiprocessing.
+Version PARALELA (MPI, patron Maestro/Esclavo) del procesamiento del
+dataset Steam Reviews. Mapa rapido de requisitos -> ubicacion en este
+archivo (buscar por la etiqueta REQUISITO):
 
-Cada worker es un PROCESO independiente del sistema operativo (no un hilo),
-lo que significa que cada uno tiene su propia copia de memoria: el "maestro"
-(este script) tiene que enviarle a cada worker su porcion de datos (esto se
-hace automaticamente via pickle/serializacion), y luego recolectar y combinar
-los resultados parciales que cada worker regresa.
+  - Patron Maestro/Esclavo   -> main(): bloque `if rank == 0` (maestro)
+                                 vs codigo que corre en todos los rangos
+  - Division por bloques     -> main(): np.array_split(...)
+  - Scatter                  -> main(): comm.scatter(...)
+  - Gather                   -> main(): comm.gather(...)
+  - Cerraduras (Barreras)    -> main(): las dos llamadas a comm.Barrier()
+  - Tiempo de sincronizacion -> main(): t_sync_start / t_sync_end alrededor
+                                 de la barrera 2
 """
 
+from mpi4py import MPI
 from pathlib import Path
 from collections import defaultdict
-import multiprocessing as mp
 import pandas as pd
 import numpy as np
 import time
-import sys
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 RUTA_MUESTRA = BASE_DIR / "data" / "sample" / "muestra_grande.csv"
-RUTA_COMPLETA = BASE_DIR / "data" / "raw" / "dataset.csv"
 COLUMNAS_NECESARIAS = ["app_name", "review_score", "review_votes"]
 
-
 def procesar_bloque(bloque):
-    """
-    Funcion que ejecuta CADA WORKER de forma independiente sobre su
-    porcion del DataFrame (su "bloque"). La logica interna es identica
-    a procesar_secuencial(), la diferencia es que aqui solo se ve una
-    fraccion de los datos totales, no el DataFrame completo.
-
-    Esta funcion debe estar definida a nivel de modulo (no anidada
-    dentro de otra funcion) para que multiprocessing pueda "picklearla"
-    y enviarla a cada proceso worker.
-    """
     resultados = defaultdict(lambda: {"positivas": 0, "negativas": 0, "votos_utiles": 0})
-
+    if bloque is None or bloque.empty:
+        return dict(resultados)
+    
     for fila in bloque.itertuples(index=False):
         juego = fila.app_name
         if pd.isna(juego):
             continue
-
         if fila.review_score == 1:
             resultados[juego]["positivas"] += 1
         else:
             resultados[juego]["negativas"] += 1
-
         resultados[juego]["votos_utiles"] += fila.review_votes
-
+    
     return dict(resultados)
 
-
 def combinar_resultados(lista_resultados):
-    """
-    Este es el paso de REDUCCION: el proceso maestro recibe una lista
-    de diccionarios parciales (uno por cada worker) y los suma en un
-    solo diccionario final.
-
-    Es importante notar que esta suma es conmutativa y asociativa
-    (sumar en cualquier orden da el mismo resultado), lo cual es lo
-    que hace seguro combinar resultados de workers que terminaron en
-    momentos distintos y en cualquier orden.
-    """
     combinado = defaultdict(lambda: {"positivas": 0, "negativas": 0, "votos_utiles": 0})
-
     for parcial in lista_resultados:
         for juego, datos in parcial.items():
             combinado[juego]["positivas"] += datos["positivas"]
             combinado[juego]["negativas"] += datos["negativas"]
             combinado[juego]["votos_utiles"] += datos["votos_utiles"]
-
     return dict(combinado)
 
+def main():
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+    
+    # REQUISITO: Cerradura/Barrera 1 - todos los procesos arrancan el cronometro juntos
+    comm.Barrier()
+    inicio = 0
+    if rank == 0:
+        inicio = time.perf_counter()
+        print(f"[Maestro (M)] Iniciando procesamiento paralelo con {size} procesos.")
+        print(f"[Maestro (M)] Leyendo dataset desde el disco duro...")
 
-def dividir_dataframe(df, n_partes):
-    """
-    Divide el DataFrame en n_partes bloques aproximadamente iguales.
+    # REQUISITO: Patron Maestro/Esclavo
+    bloques = None
+    if rank == 0:
+        try:
+            df = pd.read_csv(RUTA_MUESTRA, usecols=COLUMNAS_NECESARIAS)
+            print(f"[Maestro (M)] ¡Leídas {len(df):,} filas! Cortando en {size} pedazos iguales (bloques)...")
+        except FileNotFoundError:
+            print(f"Error: No se encontró {RUTA_MUESTRA}")
+            comm.Abort(1)
 
-    IMPORTANTE: dividimos los INDICES (numeros de fila) con
-    np.array_split(), y luego extraemos cada bloque con .iloc[].
-    Si en vez de esto se hace np.array_split(df, n_partes) directamente
-    sobre el DataFrame, numpy puede convertir cada pedazo en un arreglo
-    plano (numpy.ndarray) en vez de mantenerlo como DataFrame, lo cual
-    rompe el uso de itertuples() dentro de procesar_bloque().
-    """
-    indices = np.array_split(np.arange(len(df)), n_partes)
-    return [df.iloc[idx] for idx in indices]
+        # REQUISITO: Division por bloques
+        indices = np.array_split(np.arange(len(df)), size)
+        bloques = [df.iloc[idx] for idx in indices]
+        print(f"[Maestro (M)] Ejecutando Scatter: enviando un bloque de trabajo a cada esclavo.")
 
+    # REQUISITO: Scatter
+    t_scatter_start = time.perf_counter()
+    bloque_local = comm.scatter(bloques, root=0)
+    t_scatter_end = time.perf_counter()
+    
+    filas_asignadas = len(bloque_local) if bloque_local is not None else 0
+    simbolo = "(M)" if rank == 0 else "(E)"
+    print(f"[Proceso {rank} {simbolo}] Recibí mi bloque de {filas_asignadas:,} filas. Trabajando...")
 
-def procesar_paralelo(df, n_procesos):
-    """
-    Orquesta el patron maestro-trabajador completo:
-      1. El maestro divide el DataFrame en n_procesos bloques (dividir_dataframe)
-      2. Crea un Pool de procesos y les asigna un bloque a cada uno (pool.map)
-      3. Cada worker procesa su bloque de forma independiente (procesar_bloque)
-      4. El maestro combina todos los resultados parciales (combinar_resultados)
+    # ESCLAVOS: cada proceso procesa su bloque
+    t_trabajo_start = time.perf_counter()
+    resultado_local = procesar_bloque(bloque_local)
+    t_trabajo_end = time.perf_counter()
+    
+    tiempo_mi_trabajo = t_trabajo_end - t_trabajo_start
+    print(f"[Proceso {rank} {simbolo}] Terminé mi bloque en {tiempo_mi_trabajo:.2f}s. Esperando en la barrera a que los demás acaben...")
 
-    pool.map() es BLOQUEANTE: espera a que todos los workers terminen
-    antes de continuar, lo cual es justo lo que queremos para medir el
-    tiempo total de la operacion paralela completa.
-    """
-    bloques = dividir_dataframe(df, n_procesos)
+    # REQUISITO: Cerradura/Barrera 2 (Tiempo de sincronización)
+    t_sync_start = time.perf_counter()
+    comm.Barrier()
+    t_sync_end = time.perf_counter()
+    tiempo_sync = t_sync_end - t_sync_start
 
-    # El "with" asegura que el Pool cierre sus procesos correctamente
-    # al terminar, incluso si ocurre un error durante el procesamiento
-    with mp.Pool(processes=n_procesos) as pool:
-        resultados_parciales = pool.map(procesar_bloque, bloques)
+    print(f"[Proceso {rank} {simbolo}] La barrera se levantó (esperé {tiempo_sync:.4f}s). Enviando mis resultados al Maestro (Gather)...")
 
-    return combinar_resultados(resultados_parciales)
+    # REQUISITO: Gather
+    resultados_globales = comm.gather(resultado_local, root=0)
+    tiempos_sync_globales = comm.gather(tiempo_sync, root=0)
 
+    # MAESTRO: Combina resultados
+    if rank == 0:
+        print(f"[Maestro (M)] Recibí todas las libretas parciales. Fusionando datos finales...")
+        resultado_final = combinar_resultados(resultados_globales)
+        fin = time.perf_counter()
+        
+        tiempo_total = fin - inicio
+        tiempo_sync_maximo = max(tiempos_sync_globales)  # El proceso que esperó más
+        
+        print(f"[Maestro (M)] ¡Fusión completa!\n")
+        print(f"--- RESULTADOS MPI ---")
+        print(f"Procesos: {size}")
+        print(f"Tiempo Total: {tiempo_total:.4f}")
+        print(f"Tiempo Sincronizacion: {tiempo_sync_maximo:.4f}")
+        print(f"Juegos: {len(resultado_final)}")
 
-if __name__ == "__main__":
-    # Igual que en secuencial.py: la lectura del CSV queda fuera de la
-    # medicion de tiempo, para medir solo el costo del paralelismo en si
-    df = pd.read_csv(RUTA_MUESTRA, usecols=COLUMNAS_NECESARIAS)
-
-    # Permite indicar el numero de procesos como argumento de linea de
-    # comandos (por ejemplo: python paralelo.py 8), o usa 4 por defecto
-    n_procesos = int(sys.argv[1]) if len(sys.argv) > 1 else 4
-
-    inicio = time.perf_counter()
-    resultados = procesar_paralelo(df, n_procesos)
-    fin = time.perf_counter()
-
-    print(f"Procesos usados: {n_procesos}")
-    print(f"Tiempo paralelo: {fin - inicio:.4f} segundos")
-    print(f"Juegos procesados: {len(resultados)}")
-
-    for juego, datos in list(resultados.items())[:5]:
-        print(f"{juego}: {datos}")
+if __name__ == '__main__':
+    main()
