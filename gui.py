@@ -137,7 +137,7 @@ class App:
         ttk.Label(top_frame, text=" Datos extraídos de tiempos.csv").pack(side=tk.LEFT, padx=10)
         
         # 3. TABLA DE RESULTADOS ESTILO EXCEL (Treeview)
-        columnas = ("Procesos", "Corrida", "Tiempo Total (s)", "Tiempo Sincronización (s)")
+        columnas = ("Procesos", "Iteración", "Tiempo Total (s)", "Tiempo Sincronización (s)")
         self.tree = ttk.Treeview(self.tab_datos, columns=columnas, show="headings", height=15)
         
         for col in columnas:

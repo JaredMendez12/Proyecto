@@ -203,16 +203,16 @@ def analizar_diferencias(historial):
     mejor_global = max(mejores, key=lambda x: x[2])
 
     lineas = []
-    lineas.append(f"- Se compararon **{len(historial)}** corrida(s): {', '.join(e for e, _ in fracciones)}.")
+    lineas.append(f"- Se compararon **{len(historial)}** iteración(es): {', '.join(e for e, _ in fracciones)}.")
     lineas.append(
-        f"- La **fracción secuencial estimada (Ley de Amdahl)** promedió **{promedio_frac:.2%}** entre corridas, "
+        f"- La **fracción secuencial estimada (Ley de Amdahl)** promedió **{promedio_frac:.2%}** entre iteraciones, "
         f"con un mínimo de {corrida_min[1]:.2%} (en '{corrida_min[0]}') y un máximo de {corrida_max[1]:.2%} (en '{corrida_max[0]}'). "
-        f"Como el código no cambia entre corridas, esa diferencia de {abs(corrida_max[1] - corrida_min[1]):.2%} "
+        f"Como el código no cambia entre iteraciones, esa diferencia de {abs(corrida_max[1] - corrida_min[1]):.2%} "
         f"refleja principalmente ruido del sistema (otros procesos corriendo, calendarización del SO) y no una mejora real."
     )
     lineas.append(
-        f"- La **mejor aceleración observada** en todas las corridas fue **{mejor_global[2]:.2f}x**, "
-        f"lograda con {mejor_global[1]} proceso(s) en la corrida '{mejor_global[0]}'."
+        f"- La **mejor aceleración observada** en todas las iteraciones fue **{mejor_global[2]:.2f}x**, "
+        f"lograda con {mejor_global[1]} proceso(s) en la iteración '{mejor_global[0]}'."
     )
 
     t1s = [(item["etiqueta"], item["metricas"]["promedios"].get(min(item["metricas"]["n_procesos_lista"])))
@@ -222,7 +222,7 @@ def analizar_diferencias(historial):
         variacion = (max(valores_t1) - min(valores_t1)) / min(valores_t1)
         lineas.append(
             f"- El tiempo de referencia con el menor número de procesos varió entre "
-            f"{min(valores_t1):.2f}s y {max(valores_t1):.2f}s según la corrida (una variación de {variacion:.1%}), "
+            f"{min(valores_t1):.2f}s y {max(valores_t1):.2f}s según la iteración (una variación de {variacion:.1%}), "
             f"lo cual es normal al medir tiempos de ejecución reales en una máquina compartida con otros procesos."
         )
 
@@ -259,11 +259,11 @@ col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
     procesos_txt = st.text_input("Lista de procesos a probar (separados por coma)", value="1,2,4,8")
 with col2:
-    corridas = st.number_input("Corridas por configuración", min_value=1, max_value=20, value=3, step=1)
+    corridas = st.number_input("Iteraciones por configuración", min_value=1, max_value=20, value=3, step=1)
 with col3:
-    etiqueta_sugerida = f"Corrida #{len(st.session_state.historial) + 1}"
+    etiqueta_sugerida = f"Iteración #{len(st.session_state.historial) + 1}"
     etiqueta_input = st.text_input(
-        "Etiqueta de esta corrida",
+        "Etiqueta de esta iteración",
         key="etiqueta_input",
         placeholder=etiqueta_sugerida,
         help="Ponle un nombre que te ayude a identificarla despues, ej. 'Con 1.5M filas' o 'Laptop en carga'.",
@@ -272,7 +272,7 @@ with col3:
 
 col_run, col_clear = st.columns([1, 1])
 ejecutar = col_run.button("▶ Ejecutar benchmark", type="primary", width="stretch")
-limpiar = col_clear.button("🗑 Limpiar historial de corridas", width="stretch")
+limpiar = col_clear.button("🗑 Limpiar historial de iteraciones", width="stretch")
 
 if limpiar:
     st.session_state.historial = []
@@ -288,7 +288,7 @@ if ejecutar:
         n_procesos_lista = None
 
     if n_procesos_lista:
-        st.write(f"**{etiqueta}** — procesos: {n_procesos_lista}, corridas por configuración: {corridas}")
+        st.write(f"**{etiqueta}** — procesos: {n_procesos_lista}, iteraciones por configuración: {corridas}")
 
         total_repeticiones = len(n_procesos_lista) * corridas
         barra_progreso = st.progress(0, text=f"0/{total_repeticiones} repeticiones completadas")
@@ -310,7 +310,7 @@ if ejecutar:
 
             if log_placeholder is not None:
                 lineas_log.append(
-                    f"[{fila['n_procesos']} proc, corrida {fila['corrida']}] "
+                    f"[{fila['n_procesos']} proc, iteración {fila['corrida']}] "
                     f"Total={fila['tiempo_total']:.4f}s  Sync={fila['tiempo_sync']:.4f}s"
                 )
                 log_placeholder.code("\n".join(lineas_log[-300:]), height=350)
@@ -359,19 +359,19 @@ if ejecutar:
             st.error("No se encontró 'mpiexec'. Instala MS-MPI y reinicia esta app (cierra la terminal donde corre Streamlit y ábrela de nuevo).")
 
 DESCRIPCIONES_GRAFICAS = {
-    "tiempo_total": "Tiempo total promedio (segundos) y tiempo de sincronización promedio, para cada cantidad de procesos probada en esta corrida. Es el dato crudo, antes de calcular aceleración o eficiencia.",
+    "tiempo_total": "Tiempo total promedio (segundos) y tiempo de sincronización promedio, para cada cantidad de procesos probada en esta iteración. Es el dato crudo, antes de calcular aceleración o eficiencia.",
     "aceleraciones": "Aceleración real (T₁/Tₙ) contra la aceleración ideal (línea punteada). Entre más cerca esté la curva de la línea ideal, mejor escala el programa al agregar procesos.",
     "eficiencias": "Aceleración dividida entre el número de procesos. Cerca del 100% significa buen aprovechamiento; la caída al aumentar procesos es esperada por el overhead de Scatter/Gather/Barrera y por la fracción secuencial (Ley de Amdahl).",
 }
 
 if st.session_state.historial:
-    st.subheader(f"Resultados por corrida ({len(st.session_state.historial)} corrida(s) en esta sesión)")
+    st.subheader(f"Resultados por iteración ({len(st.session_state.historial)} iteración(es) en esta sesión)")
 
     for idx, item in enumerate(st.session_state.historial, start=1):
         m = item["metricas"]
         filas_crudas = item.get("filas", [])
         st.markdown(f"### {item['etiqueta']}")
-        st.caption(f"Corrida #{idx} de esta sesión")
+        st.caption(f"Iteración #{idx} de esta sesión")
 
         st.markdown("**Datos por configuración** (cada fila es una repetición individual, sin promediar):")
         if filas_crudas:
@@ -389,7 +389,7 @@ if st.session_state.historial:
                     ]
                     st.dataframe(tabla_n, width="stretch", hide_index=True)
         else:
-            st.caption("No hay datos crudos guardados para esta corrida (se generó antes de esta funcionalidad).")
+            st.caption("No hay datos crudos guardados para esta iteración (se generó antes de esta funcionalidad).")
 
         st.markdown("**Comparación / resumen** (promedio de las repeticiones de arriba, para comparar entre configuraciones):")
         tabla_corrida = []
@@ -402,7 +402,7 @@ if st.session_state.historial:
                 "Eficiencia": f"{m['eficiencias'][i]:.1%}",
             })
         st.dataframe(tabla_corrida, width="stretch", hide_index=True)
-        st.caption(f"Fracción secuencial estimada (Ley de Amdahl) para esta corrida: {m['fraccion_secuencial']:.2%}")
+        st.caption(f"Fracción secuencial estimada (Ley de Amdahl) para esta iteración: {m['fraccion_secuencial']:.2%}")
 
         gcol1, gcol2, gcol3 = st.columns(3)
         especificaciones = [
@@ -418,11 +418,11 @@ if st.session_state.historial:
 
         st.divider()
 
-    st.subheader("Análisis de diferencias entre corridas")
+    st.subheader("Análisis de diferencias entre iteraciones")
 
     st.markdown(analizar_diferencias(st.session_state.historial))
 
-    st.markdown("**Comparación superpuesta** (todas las corridas en la misma gráfica, para verlas una junto a otra):")
+    st.markdown("**Comparación superpuesta** (todas las iteraciones en la misma gráfica, para verlas una junto a otra):")
     acol1, acol2, acol3 = st.columns(3)
     with acol1:
         with st.container(border=True):
