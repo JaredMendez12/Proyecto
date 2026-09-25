@@ -30,6 +30,8 @@ if "historial" not in st.session_state:
     st.session_state.historial = []  # cada item: {"etiqueta", "metricas"}
 if "mostrar_logs" not in st.session_state:
     st.session_state.mostrar_logs = True
+if st.session_state.pop("limpiar_etiqueta", False):
+    st.session_state.etiqueta_input = ""
 
 
 def parsear_metricas_main(texto):
@@ -351,7 +353,7 @@ if ejecutar:
             st.session_state.historial.append({"etiqueta": etiqueta, "metricas": metricas_final, "filas": filas})
             benchmark.graficar(metricas_final)
             st.success(f"Benchmark '{etiqueta}' completo. Fracción secuencial estimada (Amdahl): {metricas_final['fraccion_secuencial']:.4f}")
-            st.session_state.etiqueta_input = ""
+            st.session_state.limpiar_etiqueta = True
             st.rerun()
         except FileNotFoundError:
             st.error("No se encontró 'mpiexec'. Instala MS-MPI y reinicia esta app (cierra la terminal donde corre Streamlit y ábrela de nuevo).")
